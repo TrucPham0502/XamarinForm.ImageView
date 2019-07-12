@@ -1,287 +1,128 @@
-﻿using System.ComponentModel;
-using System.Linq;
+﻿using System;
+using System.ComponentModel;
+using Android.Content;
+using Android.Graphics;
+using Android.Views;
+using Android.Views.Animations;
+using Android.Widget;
 using Biz4.Core.Controls;
-using CoreGraphics;
-using Fin1.iOS.Renderers;
-using Foundation;
-using System;
-using UIKit;
-using Xamarin.Forms;
-using Xamarin.Forms.Platform.iOS;
-using System.Diagnostics;
+using Fin1.Droid.Renderers;
+using Xamarin.Forms.Platform.Android;
+using static Android.Views.ScaleGestureDetector;
+using Android.Media;
+using Java.IO;
+using Java.Net;
+using Android.App;
+using Android.Runtime;
+using static Android.Widget.ImageView;
+using System.Text;
+using static Android.Views.View;
+using Android.Provider;
+using Android.Graphics.Drawables;
+using Android.OS;
 
-[assembly: ExportRenderer(typeof(ImageViewer), typeof(ImageViewerRenderer))]
-namespace Fin1.iOS.Renderers
+[assembly: Xamarin.Forms.ExportRenderer(typeof(ImageViewer), typeof(ImageViewerRenderer))]
+namespace Fin1.Droid.Renderers
 {
-    public class ImageViewerRenderer : ViewRenderer<ImageViewer, UIView>
+    public class ImageViewerRenderer : ViewRenderer<ImageViewer, ImageView>, IOnScaleGestureListener, IOnTouchListener
     {
         private ImageViewer _imageViewer => Element as ImageViewer;
-        private UIImageView _imageView;
-        private UIImage _image;
-        private UIScrollView _scrollView;
-        private UITapGestureRecognizer zoomGestureRecognizer;
+        Matrix matrix = new Matrix();
+
+        const int NONE = 0;
+        const int DRAG = 1;
+        const int ZOOM = 2;
+        const int CLICK = 3;
+        int mode = NONE;
+
+        PointF last = new PointF();
+        PointF start = new PointF();
+        float minScale = 1f;
+        float maxScale = 4f;
+        float[] m;
+
+        float redundantXSpace, redundantYSpace;
+        float width, height;
+        float saveScale = 1f;
+        float right, bottom, origWidth, origHeight, bmWidth, bmHeight;
+
+        ScaleGestureDetector mScaleDetector;
+        GestureDetector mDoubleTapDetector;
 
 
-        NSLayoutConstraint _imageViewTop;
-        NSLayoutConstraint _imageViewBottom;
-        NSLayoutConstraint _imageViewLeading;
-        NSLayoutConstraint _imageViewTrailing;
+        Context context;
+        public ImageViewerRenderer(Context context) : base(context)
+        {
+            this.context = context;
+            mScaleDetector = new ScaleGestureDetector(context, this);
+            matrix.SetTranslate(1f, 1f);
+            m = new float[9];
 
+        }
 
         protected override void OnElementChanged(ElementChangedEventArgs<ImageViewer> e)
         {
-            try
+            base.OnElementChanged(e);
+            if (e.NewElement != null)
             {
-                base.OnElementChanged(e);
-                if (e.NewElement != null)
+                var ctrl = CreateNativeControl();
+                SetNativeControl(ctrl);
+
+
+                Control.ImageMatrix = (matrix);
+                Control.SetScaleType(ScaleType.Matrix);
+
+                SetImageUri(_imageViewer.ImageSource);
+
+                Control.SetOnTouchListener(this);
+
+                Control.SetBackgroundColor(Color.Black);
+
+
+                mScaleDetector = new ScaleGestureDetector(this.context, this);
+
+                mDoubleTapDetector = new GestureDetector(this.context, new DoubleTapListener((mo) =>
                 {
-                    var ctrl = CreateNativeControl();
-                    SetNativeControl(ctrl);
-                    Setup();
-                    GetPhoneNumber();
-                }
-                  
+                    DoubleAction(mo);
+                }));
             }
-            catch(Exception ex)
-            {
-                Debug.WriteLine(ex);
-            } 
+
+
+
         }
 
-
-        protected override UIView CreateNativeControl()
-        {
-            return new UIView();
-        }
-
-        private void zoomWhenDoubleTapped()
+        private void DoubleAction(MotionEvent e)
         {
             try
             {
-               
-                // Nếu zoomScale hiện tại > minimumZoomScale tức là ảnh đang bị zoom, douple tap sẽ zoom out về kích thước nhỏ nhất
-                if (_scrollView.ZoomScale > _scrollView.MinimumZoomScale)
+                System.Diagnostics.Debug.WriteLine("MAIN_TAG", "Double tap detected");
+                float origScale = saveScale;
+                float mScaleFactor;
+
+                if (saveScale > minScale)
                 {
-                    _scrollView.SetZoomScale(_scrollView.MinimumZoomScale, animated: true);
-                    
+                    ResetDefault();
                 }
                 else
                 {
-                    // Nếu zoomScale hiện tại > minimumZoomScale tức là ảnh đang bị zoom, douple tap sẽ zoom in đến kích thước lớn nhất
-                    var tapPoint = zoomGestureRecognizer.LocationInView(Control);
-                    var imageSize = _imageView.Frame.Size;
-                    
-                    var width = imageSize.Width / _scrollView.MaximumZoomScale;
-                    var height = imageSize.Height / _scrollView.MaximumZoomScale;
+                    saveScale = maxScale;
+                    mScaleFactor = maxScale / origScale;
+                    ChangeScale(mScaleFactor, e.GetX(), e.GetY());
 
-                    var center = _imageView.ConvertPointFromView(tapPoint, _scrollView);
-
-                    var x = center.X - (width / 2.0);
-                    var y = center.Y - (height / 2.0);
-
-                    _scrollView.ZoomToRect(new CGRect(x,y,width,height), animated: true);
                 }
-            }
-            catch(Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-            
-        }
-
-        private void GetPhoneNumber()
-        {
-            //var num = NSUserDefaults.StandardUserDefaults.StringForKey(@"SBFormattedPhoneNumber");
-        }
-
-        private void ScrollViewInit()
-        {
-            try
-            {
-                _scrollView = new UIScrollView();
-                _scrollView.TranslatesAutoresizingMaskIntoConstraints = false;
-                Control.AddSubview(_scrollView);
-
-                _scrollView.TopAnchor.ConstraintEqualTo(TopAnchor, 0).Active = true;
-                _scrollView.BottomAnchor.ConstraintEqualTo(BottomAnchor, 0).Active = true;
-                _scrollView.LeadingAnchor.ConstraintEqualTo(LeadingAnchor, 0).Active = true;
-                _scrollView.TrailingAnchor.ConstraintEqualTo(TrailingAnchor, 0).Active = true;
-                _scrollView.ScrollEnabled = true;
-                _scrollView.ShowsHorizontalScrollIndicator = false;
-                _scrollView.ShowsVerticalScrollIndicator = false;
-
-                _scrollView.ViewForZoomingInScrollView = GetZoomSubView;
-
-
-
-                _scrollView.DidZoom += ScrollDidZoom;
-
-                _scrollView.BackgroundColor = UIColor.Black;
-            }
-            catch(Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-            
-        }
-
-    
-
-        private void ImageViewInit()
-        {
-            try
-            {
-                _image = FromUrl(_imageViewer.ImageSource);
-
-                _imageView = new UIImageView()
-                {
-                    Image = _image,
-
-                };
-                _scrollView.AddSubview(_imageView);
-                //NSLayoutConstraint.Create(imageView,NSLayoutAttribute.Top,NSLayoutRelation.Equal,this, NSLayoutAttribute.LeadingMargin, 1.0f, 0.0f).Active = true;
-                //NSLayoutConstraint.Create(imageView, NSLayoutAttribute.Bottom, NSLayoutRelation.Equal, this, NSLayoutAttribute.LeadingMargin, 1.0f, 0.0f).Active = true;
-                //NSLayoutConstraint.Create(imageView, NSLayoutAttribute.Leading, NSLayoutRelation.Equal, this, NSLayoutAttribute.LeadingMargin, 1.0f, 0.0f).Active = true;
-                //NSLayoutConstraint.Create(imageView, NSLayoutAttribute.Trailing, NSLayoutRelation.Equal, this, NSLayoutAttribute.LeadingMargin, 1.0f, 0.0f).Active = true;
-                _imageView.TranslatesAutoresizingMaskIntoConstraints = false;
-
-
-
-
-                _imageViewTop = _imageView.TopAnchor.ConstraintEqualTo(_scrollView.TopAnchor);
-                _imageViewBottom = _imageView.BottomAnchor.ConstraintEqualTo(_scrollView.BottomAnchor);
-                _imageViewLeading = _imageView.LeadingAnchor.ConstraintEqualTo(_scrollView.LeadingAnchor);
-                _imageViewTrailing = _imageView.TrailingAnchor.ConstraintEqualTo(_scrollView.TrailingAnchor);
-
-
-                _imageViewTop.Active = true;
-                _imageViewBottom.Active = true;
-                _imageViewLeading.Active = true;
-                _imageViewTrailing.Active = true;
-
-                
-                
-
-                _imageView.ClipsToBounds = true;
-                _imageView.AutosizesSubviews = true;
-                _imageView.Opaque = true;
-
-                _imageView.ContentMode = UIViewContentMode.ScaleAspectFit;
-                _imageView.BackgroundColor = UIColor.Black;
-            }
-            catch(Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-            
-
-        }
-
-        private void Setup()
-        {
-            try
-            {
-                ScrollViewInit();
-                ImageViewInit();
-
-
-                zoomGestureRecognizer = new UITapGestureRecognizer();
-                zoomGestureRecognizer.AddTarget(zoomWhenDoubleTapped);
-                zoomGestureRecognizer.NumberOfTapsRequired = 2;
-
-                
-
-                Control.AddGestureRecognizer(zoomGestureRecognizer);
-
             }
             catch (Exception ex)
             {
-                Debug.WriteLine(ex);
+                System.Diagnostics.Debug.WriteLine(ex);
             }
-            
-        }
-        private UIImage FromUrl(string uri)
-        {
-            try
-            {
-                if(!string.IsNullOrEmpty(uri))
-                {
-                    using (var url = new NSUrl(uri))
-                    using (var data = NSData.FromUrl(url))
-                        return UIImage.LoadFromData(data);
-                }
-                
-            }
-            catch(Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-            return new UIImage();
-            
+
         }
 
-
-        private void ScrollDidZoom(object sender, EventArgs e)
+        protected override ImageView CreateNativeControl()
         {
-            updateImageViewConstraints();
-        }
-        
-        private void updateImageViewConstraints()
-        {
-            try
-            {
-                var yOffset = NMath.Max(0, (Frame.Height - _imageView.Frame.Height) / 2);
-
-                _imageViewTop.Constant = yOffset;
-                _imageViewBottom.Constant = yOffset;
-
-
-                var xOffset = NMath.Max(0, (Frame.Width - _imageView.Frame.Width) / 2);
-                _imageViewLeading.Constant = xOffset;
-                _imageViewTrailing.Constant = xOffset;
-
-                LayoutIfNeeded();
-            }
-            catch(Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-
-            
-
-        }
-        //private void CropImage()
-        //{
-        //    UIGraphics.BeginImageContextWithOptions(Bounds.Size, true, UIScreen.MainScreen.Scale);
-        //    UIGraphics.GetCurrentContext().TranslateCTM(-ContentOffset.X, -ContentOffset.Y);
-
-        //    Layer.RenderInContext(UIGraphics.GetCurrentContext());
-
-        //    var image = UIGraphics.GetImageFromCurrentImageContext();
-        //    UIGraphics.EndImageContext();
-        //    image.SaveToPhotosAlbum(image)
-
-        //}
-        private void updateMinZoomScale()
-        {
-            try
-            {
-                var widthScale = Bounds.Width / _imageView.Image.Size.Width;
-                var heightScale = Bounds.Height / _imageView.Image.Size.Height;
-                var minScale = NMath.Min(widthScale, heightScale);
-                _scrollView.MinimumZoomScale = minScale;
-                _scrollView.ZoomScale = minScale;
-                _scrollView.MaximumZoomScale = NMath.Max(1, minScale * 3);
-            }
-            catch(Exception ex)
-            {
-                Debug.WriteLine(ex);
-            }
-            
-        }
-        public override void LayoutSubviews()
-        {
-            base.LayoutSubviews();
+            var imageView = new ImageView(this.context);
+            //imageView.SetImageURI(Android.Net.Uri.Parse(Element.ImageSource));
+            return imageView;
 
         }
 
@@ -294,54 +135,360 @@ namespace Fin1.iOS.Renderers
             {
                 UpdateMinMaxScale();
             }
-            if(e.PropertyName == ImageViewer.ImageSourceProperty.PropertyName)
+            if (e.PropertyName == ImageViewer.ImageSourceProperty.PropertyName)
             {
-                if (string.IsNullOrEmpty(_imageViewer.ImageSource))
-                    return;
-                ScrollViewInit();
-                ImageViewInit();
-                updateMinZoomScale();
-                updateImageViewConstraints();
+                SetImageUri(_imageViewer.ImageSource);
             }
-            if(e.PropertyName == VisualElement.WidthProperty.PropertyName || e.PropertyName == VisualElement.HeightProperty.PropertyName)
-            {
-                this.Frame = new CGRect(Frame.X, Frame.Y, this.Element.Width, this.Element.Height);
-                ScrollViewInit();
-                ImageViewInit();
-                updateMinZoomScale();
-                updateImageViewConstraints();
-               
-            }
-            if(e.PropertyName == "Renderer")
-            {
-                //this.Frame = new CGRect(Frame.X, Frame.Y, this.Element.Width, this.Element.Height);
-                //ScrollViewInit();
-                //ImageViewInit();
-                //updateMinZoomScale();
-                //updateImageViewConstraints();
-            }
+        }
 
-        }
-        private void SetImageSoure(string src)
-        {
-            if(_imageView != null && !string.IsNullOrEmpty(src))
-            {
-                _imageView.Image = FromUrl(Element.ImageSource);
-                _imageView.UpdateFocusIfNeeded();
-            }
-        }
-        private UIView GetZoomSubView(UIScrollView scrollView)
-        {
-            return _imageView;
-        }
 
         private void UpdateMinMaxScale()
         {
-            if (_imageViewer != null && _scrollView != null)
+            if (_imageViewer != null)
             {
-                _scrollView.MinimumZoomScale = _imageViewer.MinimumZoomScale;
-                _scrollView.MaximumZoomScale = _imageViewer.MaximumZoomScale;
+                this.minScale = _imageViewer.MinimumZoomScale;
+                this.maxScale = _imageViewer.MaximumZoomScale;
             }
         }
+
+        public bool OnScale(ScaleGestureDetector detector)
+        {
+            try
+            {
+                float mScaleFactor = detector.ScaleFactor;
+                float origScale = saveScale;
+                saveScale *= mScaleFactor;
+                if (saveScale > maxScale)
+                {
+                    saveScale = maxScale;
+                    mScaleFactor = maxScale / origScale;
+                }
+                else if (saveScale < minScale)
+                {
+                    saveScale = minScale;
+                    mScaleFactor = minScale / origScale;
+                }
+                ChangeScale(mScaleFactor, detector.FocusX, detector.FocusY);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(ex);
+            }
+            return false;
+
+        }
+
+        private void ChangeScale(float mScaleFactor, float FocusX, float FocusY)
+        {
+            try
+            {
+                right = width * saveScale - width - (2 * redundantXSpace * saveScale);
+                bottom = height * saveScale - height - (2 * redundantYSpace * saveScale);
+                if (origWidth * saveScale <= width || origHeight * saveScale <= height)
+                {
+                    matrix.PostScale(mScaleFactor, mScaleFactor, width / 2, height / 2);
+                    if (mScaleFactor < 1)
+                    {
+                        matrix.GetValues(m);
+                        float x = m[Matrix.MtransX];
+                        float y = m[Matrix.MtransY];
+                        if (mScaleFactor < 1)
+                        {
+                            if (Math.Round(origWidth * saveScale) < width)
+                            {
+                                if (y < -bottom)
+                                    matrix.PostTranslate(0, -(y + bottom));
+                                else if (y > 0)
+                                    matrix.PostTranslate(0, -y);
+                            }
+                            else
+                            {
+                                if (x < -right)
+                                    matrix.PostTranslate(-(x + right), 0);
+                                else if (x > 0)
+                                    matrix.PostTranslate(-x, 0);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    matrix.PostScale(mScaleFactor, mScaleFactor, FocusX, FocusY);
+                    matrix.GetValues(m);
+                    float x = m[Matrix.MtransX];
+                    float y = m[Matrix.MtransY];
+                    if (mScaleFactor < 1)
+                    {
+                        if (x < -right)
+                            matrix.PostTranslate(-(x + right), 0);
+                        else if (x > 0)
+                            matrix.PostTranslate(-x, 0);
+                        if (y < -bottom)
+                            matrix.PostTranslate(0, -(y + bottom));
+                        else if (y > 0)
+                            matrix.PostTranslate(0, -y);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(ex);
+            }
+
+        }
+
+        protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec)
+        {
+            base.OnMeasure(widthMeasureSpec, heightMeasureSpec);
+            width = MeasureSpec.GetSize(widthMeasureSpec);
+            height = MeasureSpec.GetSize(heightMeasureSpec);
+
+
+            if (saveScale.Equals(minScale))
+                ResetDefault();
+
+
+
+
+        }
+
+        private void ResetDefault()
+        {
+            try
+            {
+                //Fit to screen.
+                float scale;
+                float scaleX = width / bmWidth;
+                float scaleY = height / bmHeight;
+                scale = Math.Min(scaleX, scaleY);
+                matrix.SetScale(scale, scale);
+                Control.ImageMatrix = (matrix);
+                saveScale = minScale;
+
+                // Center the image
+                redundantYSpace = height - (scale * bmHeight);
+                redundantXSpace = width - (scale * bmWidth);
+                redundantYSpace /= 2;
+                redundantXSpace /= 2;
+
+                matrix.PostTranslate(redundantXSpace, redundantYSpace);
+
+                origWidth = width - 2 * redundantXSpace;
+                origHeight = height - 2 * redundantYSpace;
+                right = width * saveScale - width - (2 * redundantXSpace * saveScale);
+                bottom = height * saveScale - height - (2 * redundantYSpace * saveScale);
+                Control.ImageMatrix = (matrix);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(ex);
+            }
+
+
+        }
+        public bool OnScaleBegin(ScaleGestureDetector detector)
+        {
+            mode = ZOOM;
+            RequestDisallowInterceptTouchEvent(true);
+            return true;
+        }
+
+        public void OnScaleEnd(ScaleGestureDetector detector)
+        {
+            mode = NONE;
+            if (saveScale.Equals(minScale)) ResetDefault();
+        }
+
+        public bool OnTouch(View v, MotionEvent e)
+        {
+            try
+            {
+                mDoubleTapDetector.OnTouchEvent(e);
+
+                mScaleDetector.OnTouchEvent(e);
+
+                matrix.GetValues(m);
+                float x = m[Matrix.MtransX];
+                float y = m[Matrix.MtransY];
+                PointF curr = new PointF(e.GetX(), e.GetY());
+
+                switch (e.Action)
+                {
+                    //when one finger is touching
+                    //set the mode to DRAG
+                    case MotionEventActions.Down:
+
+                        RequestDisallowInterceptTouchEvent(true);
+
+                        last.Set(e.GetX(), e.GetY());
+                        start.Set(last);
+                        mode = DRAG;
+
+                        break;
+                    //when two fingers are touching
+                    //set the mode to ZOOM
+                    case MotionEventActions.PointerDown:
+
+                        RequestDisallowInterceptTouchEvent(true);
+
+                        last.Set(e.GetX(), e.GetY());
+                        start.Set(last);
+                        mode = ZOOM;
+
+
+
+                        break;
+                    //when a finger moves
+                    //If mode is applicable move image
+                    case MotionEventActions.Move:
+                        //if the mode is ZOOM or
+                        //if the mode is DRAG and already zoomed
+                        if (mode == ZOOM || (mode == DRAG && saveScale > minScale))
+                        {
+
+                            float deltaX = curr.X - last.X;// x difference
+                            float deltaY = curr.Y - last.Y;// y difference
+                            float scaleWidth = (float)Math.Round(origWidth * saveScale);// width after applying current scale
+                            float scaleHeight = (float)Math.Round(origHeight * saveScale);// height after applying current scale
+                                                                                          //if scaleWidth is smaller than the views width
+                                                                                          //in other words if the image width fits in the view
+                                                                                          //limit left and right movement
+                            if (scaleWidth < width)
+                            {
+                                deltaX = 0;
+                                if (y + deltaY > 0)
+                                    deltaY = -y;
+                                else if (y + deltaY < -bottom)
+                                    deltaY = -(y + bottom);
+                            }
+                            //if scaleHeight is smaller than the views height
+                            //in other words if the image height fits in the view
+                            //limit up and down movement
+                            else if (scaleHeight < height)
+                            {
+                                deltaY = 0;
+                                if (x + deltaX > 0)
+                                    deltaX = -x;
+                                else if (x + deltaX < -right)
+                                    deltaX = -(x + right);
+                            }
+                            //if the image doesnt fit in the width or height
+                            //limit both up and down and left and right
+                            else
+                            {
+                                if (x + deltaX > 0)
+                                    deltaX = -x;
+                                else if (x + deltaX < -right)
+                                    deltaX = -(x + right);
+
+                                if (y + deltaY > 0)
+                                    deltaY = -y;
+                                else if (y + deltaY < -bottom)
+                                    deltaY = -(y + bottom);
+                            }
+                            //move the image with the matrix
+                            matrix.PostTranslate(deltaX, deltaY);
+                            //set the last touch location to the current
+                            last.Set(curr.X, curr.Y);
+                        }
+                        else RequestDisallowInterceptTouchEvent(false);
+                        break;
+                    //first finger is lifted
+                    case MotionEventActions.Up:
+                        mode = NONE;
+                        int xDiff = (int)Math.Abs(curr.X - start.X);
+                        int yDiff = (int)Math.Abs(curr.Y - start.Y);
+                        if (xDiff < CLICK && yDiff < CLICK)
+                            PerformClick();
+
+                        RequestDisallowInterceptTouchEvent(false);
+                        break;
+                    // second finger is lifted
+                    case MotionEventActions.PointerUp:
+                        mode = NONE;
+
+                        RequestDisallowInterceptTouchEvent(false);
+                        break;
+                }
+                Control.ImageMatrix = (matrix);
+                Control.Invalidate();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(ex);
+            }
+            return false;
+        }
+
+
+        public void setImageBitmap(Bitmap bm)
+        {
+            Control.SetImageBitmap(bm);
+
+            bmWidth = bm.Width;
+            bmHeight = bm.Height;
+        }
+        public void SetImageUri(string uri)
+        {
+            if (!string.IsNullOrEmpty(uri))
+            {
+                var mIcon_val = new DownloadImageTask().Execute(uri).GetResult();
+                if (mIcon_val != null)
+                {
+                    setImageBitmap(mIcon_val);
+                }
+
+
+            }
+
+        }
+
+
+        public void setMaxZoom(float x)
+        {
+            maxScale = x;
+        }
+
+
     }
+    public class DownloadImageTask : AsyncTask<string, object, Bitmap>
+    {
+
+        protected override Bitmap RunInBackground(params string[] @params)
+        {
+            string urldisplay = @params[0];
+            Bitmap mIcon11 = null;
+            try
+            {
+                var ipn = new Java.Net.URL(urldisplay).OpenStream();
+                mIcon11 = BitmapFactory.DecodeStream(ipn);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(ex);
+            }
+            return mIcon11;
+        }
+
+
+
+    }
+
+    public class DoubleTapListener : GestureDetector.SimpleOnGestureListener
+    {
+        Action<MotionEvent> action;
+        public DoubleTapListener(Action<MotionEvent> action)
+        {
+            this.action = action;
+        }
+        public override bool OnDoubleTap(MotionEvent e)
+        {
+            action?.Invoke(e);
+            return true;
+        }
+    }
+
+
 }
